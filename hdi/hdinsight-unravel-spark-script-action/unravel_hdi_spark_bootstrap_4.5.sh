@@ -766,7 +766,7 @@ function gen_sensor_properties() {
 # cluster-id=j-default
 # cluster-type=emr
 # chunk-size=20
-unravel-server=`echo $UNRAVEL_SERVER | sed -e "s/:.*/:4043/g"`:
+unravel-server=$UNRAVEL_HOST
 EOF
 }
 
@@ -878,8 +878,6 @@ function es_install() {
   get_sensor_initd
   # generate /usr/local/unravel_emr_sensor.sh
   # gen_sensor_script
-  # generate /usr/local/unravel_es/unravel_es.properties
-  gen_sensor_properties
 
   UES_JAR_NAME="unravel-emrsensor-pack.zip"
   UESURL="http://${UNRAVEL_SERVER}/hh/$UES_JAR_NAME"
@@ -887,8 +885,10 @@ function es_install() {
   wget -4 -q -T 10 -t 5 -O - $UESURL > ${TMP_DIR}/$UES_JAR_NAME
   RC=$?
   if [ $RC -eq 0 ]; then
+      # generate /usr/local/unravel_es/unravel_es.properties
+      gen_sensor_properties
       sudo /bin/cp ${TMP_DIR}/$UES_JAR_NAME  /usr/local/unravel_es
-      sudo unzip /usr/local/unravel_es/$UES_JAR_NAME -d /usr/local/unravel_es/
+      sudo unzip -o /usr/local/unravel_es/$UES_JAR_NAME -d /usr/local/unravel_es/
       sudo chmod 755 /usr/local/unravel_es/dbin/*
       sudo chown -R ${UNRAVEL_ES_USER}:${UNRAVEL_ES_GROUP} /usr/local/unravel_es
   else
@@ -2852,10 +2852,10 @@ def check_hive_env_content():
 
 def check_hive_site_configs():
     get_config('hive-site', set_file=hive_site_json)
-    hive_site = read_json(hive_site_json)
-
+    hive_site = json.loads(read_json(hive_site_json))
+    old_hook_regex = 'com.unraveldata.dataflow.hive.hook.Hive.*?Hook'
     try:
-        check_hive_site = all(x in hive_site for _, x in hive_site_configs.iteritems())
+        check_hive_site = all(val in hive_site['properties'][key] for key, val in hive_site_configs.iteritems())
     except Exception as e:
         print(e)
         check_hive_site = False
@@ -2863,12 +2863,15 @@ def check_hive_site_configs():
         print('\nCustom hive-site configs are correct\n')
     else:
         print('\n\nCustom hive-site configs are missing\n')
-        hive_site = json.loads(hive_site)
         for key, val in hive_site_configs.iteritems():
             try:
                 print(key + ': ', hive_site['properties'][key])
                 if re.match('hive.exec.(pre|post|failure).hooks', key) and val not in hive_site['properties'][key]:
-                    hive_site['properties'][key] += ',' + val
+                    if compare_versions(unravel_version, "4.5.0.0") >= 0:
+                        if re.search(old_hook_regex, hive_site['properties'][key]):
+                            hive_site['properties'][key] = re.sub(old_hook_regex, val, hive_site['properties'][key])
+                    else:
+                        hive_site['properties'][key] += ',' + val
                 elif re.match('hive.exec.(pre|post|failure).hooks', key):
                     pass
                 else:
@@ -2992,7 +2995,7 @@ def get_unravel_ver(protocol='http'):
         content = res.read()
         ver_regex = 'UNRAVEL_VERSION=([45].[0-9]+.[0-9]+.[0-9]+)'
         if re.search(ver_regex, content):
-            return re.search(ver_regex, content).group(1)
+            return re.search(ver_regex, content).group(1).strip()
     except Exception as e:
         print(e)
         print('Failed to get Unravel Version from {0}'.format(unravel_server))
@@ -3025,9 +3028,9 @@ def compare_versions(version1, version2):
     :type version1: str
     :param version2: string of version number
     :type version2: str
-    :return: boolean True: version1 > version2
+    :return: int 1: v1 > v2 0: v1 == v2 -1 v1 < v2
     """
-    result = False
+    result = 0
     version1_list = version1.split('.')
     version2_list = version2.split('.')
     max_version = max(len(version1_list), len(version2_list))
@@ -3035,14 +3038,13 @@ def compare_versions(version1, version2):
         v1_digit = int(version1_list[index]) if len(version1_list) > index else 0
         v2_digit = int(version2_list[index]) if len(version2_list) > index else 0
         if v1_digit > v2_digit:
-            result = True
+            result = 1
             break
         elif v1_digit < v2_digit:
-            result = False
-            break
+            result = -1
+            pass
         elif version1_list == version2_list:
-            result = True
-            break
+            result = 0
     return result
 
 def write_json(json_file_location, content_write):
@@ -3066,7 +3068,7 @@ hive_site_configs = {'hive.exec.driver.run.hooks': 'com.unraveldata.dataflow.hiv
 # New Hive Hook Class Name for 4.5.0.0
 unravel_version = get_unravel_ver(argv.unravel_protocol)
 print('Unravel Version: {0}'.format(unravel_version))
-if compare_versions(unravel_version, "4.5.0.0"):
+if compare_versions(unravel_version, "4.5.0.0") >= 0:
     hive_site_configs['hive.exec.pre.hooks'] = 'com.unraveldata.dataflow.hive.hook.UnravelHiveHook'
     hive_site_configs['hive.exec.driver.run.hooks'] = 'com.unraveldata.dataflow.hive.hook.UnravelHiveHook'
     hive_site_configs['hive.exec.post.hooks'] = 'com.unraveldata.dataflow.hive.hook.UnravelHiveHook'
