@@ -767,6 +767,7 @@ function gen_sensor_properties() {
 # cluster-type=emr
 # chunk-size=20
 unravel-server=$UNRAVEL_HOST
+cluster-id=$CLUSTER_ID
 EOF
 }
 
